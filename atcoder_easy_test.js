@@ -619,8 +619,16 @@
         });
 
         if (!res.ok) {
-          const errorText = await res.text(); // サーバーからのエラー詳細を取得
-          throw new Error(`HTTP error! status: ${res.status}, body: ${errorText}`); // エラーメッセージに詳細を含める
+          const errorText = await res.text();
+          if (errorText === "Time limit exceeded") {
+            return {
+              status: "TLE",
+              exitCode: "-1",
+              input: input,
+              error: "Time limit exceeded",
+            };
+          }
+          throw new Error(`HTTP error! status: ${res.status}, body: ${errorText}`);
         }
 
         const data = await res.json();
@@ -628,30 +636,30 @@
         if (data.result === "success") {
           return {
             status: "OK",
-            exitCode: "0", // localhost では意味のある exit code を取得するのが難しい
-            execTime: 0, // 実行時間も同様
-            memory: 0, // メモリ使用量も同様
+            exitCode: data.exit_code,
+            execTime: data.exec_time,
+            memory: data.memory,
             input: input,
             output: data.output,
-            error: data.error || "", // error フィールドがない場合を考慮
+            error: data.error || "",
           };
         } else {
           return {
-            status: "RE", // または "CE" (コンパイルエラーの場合)
-            exitCode: data.exit_code || "-1", // exit code がない場合は -1 を設定
+            status: "RE",
+            exitCode: data.exit_code || "-1",
             execTime: 0,
             memory: 0,
             input: input,
-            output: data.output || "", // output がない場合を考慮
-            error: data.error || data.message || "Localhost execution failed", // エラーメッセージがない場合はデフォルトのメッセージを設定
+            output: data.output || "",
+            error: data.error || data.message || "Localhost execution failed",
           };
         }
       } catch (error) {
-        console.error("Error running code on localhost:", error); // デバッグ用にエラーをコンソールに出力
+        console.error("Error running code on localhost:", error);
         return {
           status: "IE",
           input: input,
-          error: String(error), // エラーオブジェクトを文字列に変換
+          error: String(error),
         };
       }
     }

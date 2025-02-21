@@ -1,3 +1,5 @@
+import platform
+import time
 import re
 import os
 import subprocess
@@ -8,6 +10,11 @@ from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+try:
+    import resource  # Linux/MacOS
+except ImportError:
+    resource = None  # Windows
+
 # 設定クラスの定義
 
 
@@ -95,36 +102,31 @@ async def save_testcases(request: TestCaseRequest):
     contest_id, problem_id = match.groups()
     contest_id = contest_id.lower()
     problem_id = problem_id.lower()
-
     problem_title = request.problem_title
     print(contest_id, problem_id, problem_title)
-    problem_dir = os.path.join(settings.BASE_DIR, contest_id, problem_id)
-    if len(contest_id) >= 3 and contest_id[:3] in ['abc', 'arc', 'agc']:
-        # コンテストIDがABC, ARC, AGC で始まる場合、ABC, ARC, AGCディレクトリにフォルダが存在すればそこに保存し、そうでなければコンテストIDディレクトリに保存
-        contest_dir = os.path.join(settings.BASE_DIR, contest_id[:3].upper())
-    elif len(contest_id) >= 3 and contest_id[:3] in ['adt']:
-        # コンテストIDがADTで始まる場合、ADTディレクトリに保存し、problem_idの先頭にproblem_titleの先頭文字を追加
-        contest_dir = os.path.join(settings.BASE_DIR, contest_id[:3].upper())
-        problem_id = problem_title[0].upper() + '_' + problem_id
-        problem_dir = os.path.join(settings.BASE_DIR, contest_id, problem_id)
-    else:
-        # それ以外の場合はOthersのコンテストIDディレクトリに保存
-        contest_dir = os.path.join(settings.BASE_DIR, 'Others', contest_id)
 
-    if os.path.exists(contest_dir):
-        problem_dir = os.path.join(contest_dir, contest_id, problem_id)
+    # ADTコンテストの場合、problem_idの先頭にproblem_titleの先頭文字を追加
+    if contest_id[:3] == 'adt':
+        problem_id = problem_title[0].upper() + '_' + problem_id
+
+    problem_dir = os.path.join(settings.BASE_DIR, contest_id, problem_id)
+
+    # アーカイブされているかを確認する
+    top_dir = contest_id[:3].upper() if contest_id[:3] in ['abc', 'arc', 'agc', 'adt'] else 'Others'
+    archive_dir = os.path.join(settings.BASE_DIR, top_dir, contest_id)
+    if os.path.exists(archive_dir):
+        problem_dir = os.path.join(archive_dir, problem_id)
         print('すでに存在するディレクトリに保存します')
     print(problem_dir)
 
+    # 保存先ディレクトリと、コードファイルの作成
     os.makedirs(problem_dir, exist_ok=True)
-
-    # プログラムファイルが存在しない場合は作成
     code_file = os.path.join(problem_dir, 'main.py')
     if not os.path.exists(code_file):
         with open(code_file, 'w', encoding='utf-8') as f:
             f.write(f'# submit to {url}\n')
 
-    # テストディレクトリが既に存在する場合はエラー
+    # テストディレクトリ(テストケースの保存先)の作成
     test_dir = os.path.join(problem_dir, 'test')
     if os.path.exists(test_dir):
         raise HTTPException(status_code=400, detail="Test directory already exists")
@@ -135,10 +137,8 @@ async def save_testcases(request: TestCaseRequest):
     for idx, case in enumerate(request.testcases, start=1):
         input_file = os.path.join(test_dir, f'sample-{idx}.in')
         output_file = os.path.join(test_dir, f'sample-{idx}.out')
-
         with open(input_file, 'w', encoding='utf-8') as infile:
             infile.write(case.input + '\n')
-
         with open(output_file, 'w', encoding='utf-8') as outfile:
             outfile.write(case.output + '\n')
 
@@ -147,8 +147,8 @@ async def save_testcases(request: TestCaseRequest):
 
 @app.post("/api/run", response_class=JSONResponse)
 async def run_code(request: CodeRunRequest):
-    print(request.language, request.code, request.input)
-    # リクエストごとに一時ディレクトリを作成
+    start_time = time.perf_counter()
+
     with tempfile.TemporaryDirectory() as temp_dir:
         try:
             compile_command = None
@@ -174,76 +174,42 @@ async def run_code(request: CodeRunRequest):
             # コードの実行
             process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             try:
-                stdout, stderr = process.communicate(input=request.input, timeout=4)
+                stdout, stderr = process.communicate(input=request.input, timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
                 raise HTTPException(status_code=400, detail="Time limit exceeded") from None
 
-            if process.returncode == 0:
-                return {"result": "success", "output": stdout, "error": stderr}
+            end_time = time.perf_counter()
+            exec_time = int((end_time - start_time) * 1000)  # 実際には提出すると2倍ほどかかる
+
+            # メモリ使用量の取得
+            if resource:
+                usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+                memory_usage = usage.ru_maxrss
             else:
-                return {"result": "failure", "output": stdout, "error": stderr, "exit_code": process.returncode}
+                memory_usage = -1
+
+            if process.returncode == 0:
+                return {
+                    "result": "success",
+                    "output": stdout,
+                    "error": stderr,
+                    "exit_code": 0,
+                    "exec_time": exec_time,
+                    "memory": memory_usage
+                }
+            else:
+                return {
+                    "result": "failure",
+                    "output": stdout,
+                    "error": stderr,
+                    "exit_code": process.returncode,
+                    "exec_time": exec_time,
+                    "memory": memory_usage
+                }
 
         except Exception as e:
             return {"result": "error", "message": str(e)}
-
-
-@app.post("/api/runall", response_class=JSONResponse)
-async def run_all_tests(request: CodeRunAllRequest):
-    # テストケースの実行
-    with tempfile.TemporaryDirectory() as temp_dir:
-        compile_command = None
-        command = None
-
-        if request.language == 'python':
-            code_file = os.path.join(temp_dir, 'main.py')
-            command = ['python', code_file]
-        elif request.language == 'cpp':
-            code_file = os.path.join(temp_dir, 'main.cpp')
-            executable = os.path.join(temp_dir, 'a.exe')
-            compile_command = ['g++', code_file, '-o', executable, '-std=c++23', '-O0']
-            command = [executable]
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported language")
-
-        with open(code_file, 'w', encoding='utf-8') as f:
-            f.write(request.code)
-
-        if compile_command:
-            try:
-                subprocess.run(compile_command, check=True, capture_output=True, text=True)
-            except subprocess.CalledProcessError as e:
-                raise HTTPException(status_code=400, detail={"error": "Compilation error", "details": e.stderr}) from e
-
-        def run_single_testcase(testcase: TestCase):
-            """テストケース1つ分を実行"""
-            try:
-                result = subprocess.run(command, input=testcase.input, capture_output=True, text=True, check=True, timeout=5)
-                actual_output = result.stdout.strip()
-                if not compare_output(testcase.output, actual_output):
-                    return testcase.input, actual_output  # 不一致時にテストケース入力と出力を返す
-            except subprocess.TimeoutExpired:
-                return testcase.input, "Execution timed out"
-            except subprocess.CalledProcessError as e:
-                return testcase.input, e.stderr
-
-            return None  # 成功した場合はNoneを返す
-
-        # 並列にテストケースを実行する
-        failed_cases = []
-        with ThreadPoolExecutor() as executor:
-            futures = [executor.submit(run_single_testcase, tc) for tc in request.testcases]
-
-            # 実行結果を集約する
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    failed_cases.append(result)
-
-        if failed_cases:
-            return {"result": "failure", "failed_cases": failed_cases}
-        else:
-            return {"result": "success"}
 
 if __name__ == "__main__":
     import uvicorn
