@@ -154,7 +154,7 @@ async def save_testcases(request: TestCaseRequest):
     return {"message": "Testcases saved successfully"}
 
 
-@app.get("/api/get", response_class=JSONResponse)
+@app.post("/api/code", response_class=JSONResponse)
 async def get_code(request: CodeGetRequest):
     url = request.url
     contest_id, problem_id = url_to_contest_problem(url)
@@ -170,11 +170,15 @@ async def get_code(request: CodeGetRequest):
     if not os.path.exists(code_file):
         raise HTTPException(status_code=404, detail="Code file not found")
 
+    code = ''
     with open(code_file, 'r', encoding='utf-8') as f:
         code = f.read()
-        return {"code": code}
 
-    return {"code": ""}
+    # 末尾に存在する改行を削除
+    code = code.rstrip('\n')
+
+    print(f"code: {code}")
+    return {"result": "success", "code": code}
 
 
 @app.post("/api/run", response_class=JSONResponse)
