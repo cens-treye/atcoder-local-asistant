@@ -8,8 +8,8 @@ user scriptと併用することで、ページを開いたときにテストケ
 
 ## インストール
 1. このリポジトリをクローンします。
-2. Pythonのvenvとして、`flask`環境を作ります。
-3. `flask`環境をactivateし、`pip install -r requirements.txt`を実行します。
+2. Pythonのvenvとして、`flask`環境を作ります。(`python -m venv flask`)
+3. `flask`環境をactivateし、ライブラリをインストールします。(`.\flask\Scripts\activate`、`pip install -r requirements.txt`)
 4. タスク`atcoder_assistant_new.py`を実行します。
 5. tampermonkeyなどで`atcoder_local_assistant.js`と、`atcoder_easy_test.js`をインストールします。
 6. AtCoderの問題ページを開くと、テストケースが自動でダウンロードされます。

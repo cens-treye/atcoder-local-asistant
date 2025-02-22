@@ -47,16 +47,16 @@ class TestCaseRequest(BaseModel):
     testcases: List[TestCase]
 
 
+class CodeGetRequest(BaseModel):
+    url: str
+    problem_title: str
+    language: str
+
+
 class CodeRunRequest(BaseModel):
     language: str
     code: str
     input: Optional[str] = ""
-
-
-class CodeRunAllRequest(BaseModel):
-    language: str
-    code: str
-    testcases: List[TestCase]
 
 
 def compare_output(expected_output: str, actual_output: str, tolerance: float = 1e-10) -> bool:
@@ -90,9 +90,7 @@ def compare_output(expected_output: str, actual_output: str, tolerance: float = 
     return True
 
 
-@app.post("/api/testcase", response_class=JSONResponse)
-async def save_testcases(request: TestCaseRequest):
-    url = request.url
+def url_to_contest_problem(url: str) -> tuple:
     # なぜか、末尾に#がつくことがあるので、それを取り除く
     url = url.rstrip('#')
     comp = re.compile(r"https://atcoder.jp/contests/([a-zA-Z0-9_]+)/tasks/([a-zA-Z0-9_]+)")
@@ -102,9 +100,10 @@ async def save_testcases(request: TestCaseRequest):
     contest_id, problem_id = match.groups()
     contest_id = contest_id.lower()
     problem_id = problem_id.lower()
-    problem_title = request.problem_title
-    print(contest_id, problem_id, problem_title)
+    return contest_id, problem_id
 
+
+def resolve_save_dir(contest_id: str, problem_id: str, problem_title: str) -> str:
     # ADTコンテストの場合、problem_idの先頭にproblem_titleの先頭文字を追加
     if contest_id[:3] == 'adt':
         problem_id = problem_title[0].upper() + '_' + problem_id
@@ -116,8 +115,18 @@ async def save_testcases(request: TestCaseRequest):
     archive_dir = os.path.join(settings.BASE_DIR, top_dir, contest_id)
     if os.path.exists(archive_dir):
         problem_dir = os.path.join(archive_dir, problem_id)
-        print('すでに存在するディレクトリに保存します')
-    print(problem_dir)
+    return problem_dir
+
+
+@app.post("/api/testcase", response_class=JSONResponse)
+async def save_testcases(request: TestCaseRequest):
+    url = request.url
+    problem_title = request.problem_title
+    contest_id, problem_id = url_to_contest_problem(url)
+    print(f"contest_id: {contest_id}, problem_id: {problem_id}, problem_title: {problem_title}")
+
+    problem_dir = resolve_save_dir(contest_id, problem_id, problem_title)
+    print(f"problem_dir: {problem_dir}")
 
     # 保存先ディレクトリと、コードファイルの作成
     os.makedirs(problem_dir, exist_ok=True)
@@ -145,10 +154,31 @@ async def save_testcases(request: TestCaseRequest):
     return {"message": "Testcases saved successfully"}
 
 
+@app.get("/api/get", response_class=JSONResponse)
+async def get_code(request: CodeGetRequest):
+    url = request.url
+    contest_id, problem_id = url_to_contest_problem(url)
+    problem_dir = resolve_save_dir(contest_id, problem_id, request.problem_title)
+
+    if request.language == 'python':
+        code_file = os.path.join(problem_dir, 'main.py')
+    elif request.language == 'cpp':
+        code_file = os.path.join(problem_dir, 'main.cpp')
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported language")
+
+    if not os.path.exists(code_file):
+        raise HTTPException(status_code=404, detail="Code file not found")
+
+    with open(code_file, 'r', encoding='utf-8') as f:
+        code = f.read()
+        return {"code": code}
+
+    return {"code": ""}
+
+
 @app.post("/api/run", response_class=JSONResponse)
 async def run_code(request: CodeRunRequest):
-    start_time = time.perf_counter()
-
     with tempfile.TemporaryDirectory() as temp_dir:
         try:
             compile_command = None
@@ -172,6 +202,7 @@ async def run_code(request: CodeRunRequest):
                 subprocess.run(compile_command, check=True, capture_output=True, text=True, timeout=10)
 
             # コードの実行
+            start_time = time.perf_counter()
             process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             try:
                 stdout, stderr = process.communicate(input=request.input, timeout=5)
