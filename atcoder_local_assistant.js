@@ -145,7 +145,6 @@
   (function () {
     // URLからコンテストIDと問題IDを取得
     const url = window.location.href;
-    const url = window.location.href;
     const match = url.match(/contests\/([^/]+)\/tasks\/([^/]+)/);
     if (!match) {
       console.log("コンテストIDと問題IDを取得できませんでした。");
