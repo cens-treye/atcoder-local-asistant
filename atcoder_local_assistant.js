@@ -28,12 +28,6 @@
     return testCases;
   }
 
-  // // エディタの内容を取得する
-  // function getEditorContent() {
-  //   var editor = ace.edit("editor");
-  //   return editor.getValue();
-  // }
-
   // テストケースをダウンロードする
   function downloadTestCases(url, problemTitle, testCases) {
     fetch("http://localhost:8000/api/testcase", {
@@ -60,9 +54,53 @@
       });
   }
 
+  const langmode_to_lang = {
+    "ace/mode/c_cpp": "cpp",
+    "ace/mode/python": "python",
+  };
+
+  // 現在選択されている言語を取得する
+  function getSelectedLanguage() {
+    const editor = ace.edit("editor");
+    const modeId = editor.session.$modeId;
+    return langmode_to_lang[modeId];
+  }
+
+  // コードを書き込む
+  function writeCode(code) {
+    const editor = ace.edit("editor");
+    editor.setValue(code);
+  }
+
+  // サーバーから保存されているコードを取得する
+  async function getLocalCode() {
+    const language = getSelectedLanguage();
+    const url = window.location.href;
+    const problemTitle = document.title;
+
+    const response = await fetch("http://localhost:8000/api/code", {
+      method: "post",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        url: url,
+        problem_title: problemTitle,
+        language: language,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("HTTP error! status: " + response.status);
+    }
+
+    const data = await response.json();
+    return data.code;
+  }
+
   (function () {
     // URLからコンテストIDと問題IDを取得
-    var url = window.location.href;
+    const url = window.location.href;
     const match = url.match(/contests\/([^/]+)\/tasks\/([^/]+)/);
     if (!match) {
       console.log("コンテストIDと問題IDを取得できませんでした。");
@@ -81,5 +119,18 @@
 
     // APIに送信
     downloadTestCases(url, problemTitle, testCases);
+
+    // 押すと、ローカルのコードを取得して、エディタに書き込む
+    const button = document.createElement("button");
+    button.textContent = "ローカルのコードを取得";
+    button.className = "btn btn-default btn-sm";
+    button.style.float = "right";
+    button.onclick = async function (event) {
+      event.preventDefault();
+      const code = await getLocalCode();
+      writeCode(code);
+    };
+    const formGroup = document.querySelector("div.form-group:nth-child(2)");
+    formGroup.appendChild(button);
   })();
 })();
